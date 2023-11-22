@@ -6,7 +6,7 @@
 ### Key Achievements
 #### Exceptional Model Performance on the 300W Dataset
 
-> Our PIPNet model has achieved a significant milestone on the 300W dataset, one of the most challenging benchmarks in facial landmark detection. We have successfully attained a minimum Normalized Mean Error (NME) of 2.7%, demonstrating the model's high accuracy and robustness in complex facial recognition tasks.
+> Our PIPNet model has achieved a significant milestone on the 300W dataset, one of the most challenging benchmarks in facial landmark detection. We have successfully attained a minimum Normalized Mean Error (NME) of 2.6%, demonstrating the model's high accuracy and robustness in complex facial recognition tasks.
 
 ## Features
 * #### Utilizes ResNet as the backbone for the PIPNet model.
