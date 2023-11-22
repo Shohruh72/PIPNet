@@ -3,7 +3,7 @@
 ### This repository contains the implementation of PIPNet, a robust approach for facial landmark detection using a deep learning model based on ResNet architectures.
 [Click here to watch the video](https://www.youtube.com/watch?v=cxi1WQr-HKE)
 
-[![Alt text for your video](URL_OF_VIMEO_THUMBNAIL)]([VIMEO_VIDEO_LINK](https://github.com/Shohruh72/PIPNet/blob/main/output/weights/demo.mp4))
+[![Alt text for your video](https://github.com/Shohruh72/PIPNet/blob/main/output/weights/demo.mp4)]([VIMEO_VIDEO_LINK](https://github.com/Shohruh72/PIPNet/blob/main/output/weights/demo.mp4))
 
 
 ### Key Achievements
