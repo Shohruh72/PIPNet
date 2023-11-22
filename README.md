@@ -52,7 +52,7 @@ $ python main.py --demo
 ### Results
 | Backbone  | Epochs | Test NME |                                                                 Pretrained weights |
 |:---------:|:------:|---------:|-----------------------------------------------------------------------------------:|
-| ResNet18  |   60   |     3.05 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-1f80726d715c00432342/last_18.pth) |
+| ResNet18  |   60   |     3.02 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-1f80726d715c00432342/last_18.pth) |
 | ResNet50  |   60   |     3.11 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-1f80726d715c00432342/last_50.pth) |
 | ResNet101 |   60   |     2.60 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-1f80726d715c00432342/last_101.pth) |
 
