@@ -177,67 +177,117 @@ def compute_fr_and_auc(nmes, thres=0.1, step=0.0001):
     return fr, auc
 
 
-def process(data_dir, folder, image_name, label_name, target_size):
-    image_path = os.path.join(data_dir, folder, image_name)
-    label_path = os.path.join(data_dir, folder, label_name)
+def process(root_folder, folder_name, image_name, label_name, target_size):
+    image_path = os.path.join(root_folder, folder_name, image_name)
+    label_path = os.path.join(root_folder, folder_name, label_name)
 
-    with open(label_path, 'r') as f:
-        annotation = f.readlines()[3:-1]
-        annotation = [x.strip().split() for x in annotation]
-        annotation = [[int(float(x[0])), int(float(x[1]))] for x in annotation]
+    with open(label_path, 'r') as ff:
+        anno = ff.readlines()
+        anno = [x.strip().split() for x in anno]
+        anno = [[int(float(x[0])), int(float(x[1]))] for x in anno]
         image = cv2.imread(image_path)
         image_height, image_width, _ = image.shape
-        anno_x = [x[0] for x in annotation]
-        anno_y = [x[1] for x in annotation]
-        x_min = min(anno_x)
-        y_min = min(anno_y)
-        x_max = max(anno_x)
-        y_max = max(anno_y)
-        box_w = x_max - x_min
-        box_h = y_max - y_min
+        anno_x = [x[0] for x in anno]
+        anno_y = [x[1] for x in anno]
+        bbox_xmin = min(anno_x)
+        bbox_ymin = min(anno_y)
+        bbox_xmax = max(anno_x)
+        bbox_ymax = max(anno_y)
+        bbox_width = bbox_xmax - bbox_xmin
+        bbox_height = bbox_ymax - bbox_ymin
         scale = 1.1
-        x_min -= int((scale - 1) / 2 * box_w)
-        y_min -= int((scale - 1) / 2 * box_h)
-        box_w *= scale
-        box_h *= scale
-        box_w = int(box_w)
-        box_h = int(box_h)
-        x_min = max(x_min, 0)
-        y_min = max(y_min, 0)
-        box_w = min(box_w, image_width - x_min - 1)
-        box_h = min(box_h, image_height - y_min - 1)
-        annotation = [[(x - x_min) / box_w, (y - y_min) / box_h] for x, y in annotation]
+        bbox_xmin -= int((scale - 1) / 2 * bbox_width)
+        bbox_ymin -= int((scale - 1) / 2 * bbox_height)
+        bbox_width *= scale
+        bbox_height *= scale
+        bbox_width = int(bbox_width)
+        bbox_height = int(bbox_height)
+        bbox_xmin = max(bbox_xmin, 0)
+        bbox_ymin = max(bbox_ymin, 0)
+        bbox_width = min(bbox_width, image_width - bbox_xmin - 1)
+        bbox_height = min(bbox_height, image_height - bbox_ymin - 1)
+        anno = [[(x - bbox_xmin) / bbox_width, (y - bbox_ymin) / bbox_height] for x, y in anno]
 
-        x_max = x_min + box_w
-        y_max = y_min + box_h
-        image_crop = image[y_min:y_max, x_min:x_max, :]
+        bbox_xmax = bbox_xmin + bbox_width
+        bbox_ymax = bbox_ymin + bbox_height
+        image_crop = image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax, :]
         image_crop = cv2.resize(image_crop, (target_size, target_size))
-        return image_crop, annotation
+        return image_crop, anno
 
 
-def convert(data_dir, target_size=256):
-    if not os.path.exists(os.path.join(data_dir, 'images', 'train')):
-        os.makedirs(os.path.join(data_dir, 'images', 'train'))
-    if not os.path.exists(os.path.join(data_dir, 'images', 'test')):
-        os.makedirs(os.path.join(data_dir, 'images', 'test'))
+def convert(root_folder, target_size):
+    if not os.path.exists(os.path.join(root_folder, 'images', 'train')):
+        os.makedirs(os.path.join(root_folder, 'images', 'train'))
+    if not os.path.exists(os.path.join(root_folder, 'images', 'test')):
+        os.makedirs(os.path.join(root_folder, 'images', 'test'))
 
-    folders = ['afw', 'helen/trainset', 'lfpw/trainset']
-    annotations = {}
-    for folder in folders:
-        filenames = sorted(os.listdir(os.path.join(data_dir, folder)))
-        label_files = [x for x in filenames if '.pts' in x]
-        image_files = [x for x in filenames if '.pts' not in x]
+    folder_names = ['aihub', 'data_voucher', 'dibox', 'nir_face', 'zerone']
+    folders_train = [name + '/train' for name in folder_names]
+    annos_train = {}
+    for folder_train in folders_train:
+        all_files = sorted(os.listdir(os.path.join(root_folder, folder_train)))
+        image_files = [x for x in all_files if '.pts' not in x]
+        label_files = [x for x in all_files if '.pts' in x]
         assert len(image_files) == len(label_files)
         for image_name, label_name in zip(image_files, label_files):
-            image_crop_name = folder.replace('/', '_') + '_' + image_name
-            image_crop_name = os.path.join(data_dir, 'images', 'train', image_crop_name)
-
-            image_crop, annotation = process(data_dir, folder, image_name, label_name, target_size)
-            cv2.imwrite(image_crop_name, image_crop)
-            annotations[image_crop_name] = annotation
-    with open(os.path.join(data_dir, 'train.txt'), 'w') as f:
-        for image_crop_name, annotation in annotations.items():
+            print(image_name)
+            image_crop, anno = process(os.path.join(root_folder), folder_train, image_name,
+                                       label_name, target_size)
+            image_crop_name = folder_train.replace('/', '_') + '_' + image_name
+            cv2.imwrite(os.path.join(root_folder, 'images/train', image_crop_name), image_crop)
+            annos_train[image_crop_name] = anno
+    with open(os.path.join(root_folder, 'train.txt'), 'w') as f:
+        for image_crop_name, anno in annos_train.items():
             f.write(image_crop_name + ' ')
-            for x, y in annotation:
+            for x, y in anno:
                 f.write(str(x) + ' ' + str(y) + ' ')
             f.write('\n')
+
+    folder_names = ['aihub', 'data_voucher', 'dibox', 'nir_face', 'zerone']
+    folders_test = [name + '/test' for name in folder_names]
+    annos_test = {}
+    for folder_test in folders_test:
+        all_files = sorted(os.listdir(os.path.join(root_folder, folder_test)))
+        image_files = [x for x in all_files if '.pts' not in x]
+        label_files = [x for x in all_files if '.pts' in x]
+        assert len(image_files) == len(label_files)
+        for image_name, label_name in zip(image_files, label_files):
+            print(image_name)
+            image_crop, anno = process(os.path.join(root_folder), folder_test, image_name,
+                                       label_name, target_size)
+            image_crop_name = folder_test.replace('/', '_') + '_' + image_name
+            cv2.imwrite(os.path.join(root_folder, 'images/test', image_crop_name), image_crop)
+            annos_test[image_crop_name] = anno
+    with open(os.path.join(root_folder, 'test.txt'), 'w') as f:
+        for image_crop_name, anno in annos_test.items():
+            f.write(image_crop_name + ' ')
+            for x, y in anno:
+                f.write(str(x) + ' ' + str(y) + ' ')
+            f.write('\n')
+
+    annos = None
+    with open(os.path.join(root_folder, 'test.txt'), 'r') as f:
+        annos = f.readlines()
+    with open(os.path.join(root_folder, 'test_common.txt'), 'w') as f:
+        for anno in annos:
+            if not 'ibug' in anno:
+                f.write(anno)
+    with open(os.path.join(root_folder, 'test_challenge.txt'), 'w') as f:
+        for anno in annos:
+            if 'ibug' in anno:
+                f.write(anno)
+
+    with open(os.path.join(root_folder, 'train.txt'), 'r') as f:
+        annos = f.readlines()
+    annos = [x.strip().split()[1:] for x in annos]
+    annos = [[float(x) for x in anno] for anno in annos]
+    annos = np.array(annos)
+    meanface = np.mean(annos, axis=0)
+    meanface = meanface.tolist()
+    meanface = [str(x) for x in meanface]
+
+    with open(os.path.join(root_folder, 'indices.txt'), 'w') as f:
+        f.write(' '.join(meanface))
+
+
+convert('../Dataset/IR', 256)
