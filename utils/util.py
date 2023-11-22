@@ -288,6 +288,3 @@ def convert(root_folder, target_size):
 
     with open(os.path.join(root_folder, 'indices.txt'), 'w') as f:
         f.write(' '.join(meanface))
-
-
-convert('../Dataset/IR', 256)
