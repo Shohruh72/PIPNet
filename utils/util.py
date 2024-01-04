@@ -1,8 +1,47 @@
 import os
 import cv2
-import torch
+import copy
+import math
+import random
+
 import numpy as np
+import torch
 from scipy.integrate import simps
+
+
+def setup_seed():
+    """
+    Setup random seed.
+    """
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+def setup_multi_processes():
+    """
+    Setup multi-processing environment variables.
+    """
+    import cv2
+    from os import environ
+    from platform import system
+
+    # set multiprocess start method as `fork` to speed up the training
+    if system() != 'Windows':
+        torch.multiprocessing.set_start_method('fork', force=True)
+
+    # disable opencv multithreading to avoid system being overloaded
+    cv2.setNumThreads(0)
+
+    # setup OMP threads
+    if 'OMP_NUM_THREADS' not in environ:
+        environ['OMP_NUM_THREADS'] = '1'
+
+    # setup MKL threads
+    if 'MKL_NUM_THREADS' not in environ:
+        environ['MKL_NUM_THREADS'] = '1'
 
 
 def get_criterion(criterion_name):
@@ -13,154 +52,6 @@ def get_criterion(criterion_name):
     return criteria.get(criterion_name)
 
 
-class ComputeLoss:
-    def __init__(self, params):
-        self.num_nb = params['num_nb']
-        self.cls_weight = params['cls_weight']
-        self.reg_weight = params['reg_weight']
-        self.criterion_cls = get_criterion(params['criterion_cls'])
-        self.criterion_reg = get_criterion(params['criterion_reg'])
-
-    def __call__(self, outputs, labels):
-        output_keys = ['cls_layer', 'x_layer', 'y_layer', 'nb_x_layer', 'nb_y_layer']
-        label_keys = ['lb_map', 'lb_x', 'lb_y', 'lb_nb_x', 'lb_nb_y']
-        outputs_map, outputs_local_x, outputs_local_y, outputs_nb_x, outputs_nb_y = (outputs[key] for key in
-                                                                                     output_keys)
-        labels_map, labels_x, labels_y, labels_nb_x, labels_nb_y = (labels[key] for key in label_keys)
-        tmp_batch, tmp_channel, tmp_height, tmp_width = outputs_map.size()
-        labels_map = labels_map.view(tmp_batch * tmp_channel, -1)
-        labels_max_ids = torch.argmax(labels_map, 1)
-        labels_max_ids = labels_max_ids.view(-1, 1)
-        labels_max_ids_nb = labels_max_ids.repeat(1, self.num_nb).view(-1, 1)
-
-        outputs_local_x = outputs_local_x.view(tmp_batch * tmp_channel, -1)
-        outputs_local_x_select = torch.gather(outputs_local_x, 1, labels_max_ids)
-        outputs_local_y = outputs_local_y.view(tmp_batch * tmp_channel, -1)
-        outputs_local_y_select = torch.gather(outputs_local_y, 1, labels_max_ids)
-        outputs_nb_x = outputs_nb_x.view(tmp_batch * self.num_nb * tmp_channel, -1)
-        outputs_nb_x_select = torch.gather(outputs_nb_x, 1, labels_max_ids_nb)
-        outputs_nb_y = outputs_nb_y.view(tmp_batch * self.num_nb * tmp_channel, -1)
-        outputs_nb_y_select = torch.gather(outputs_nb_y, 1, labels_max_ids_nb)
-
-        labels_local_x = labels_x.view(tmp_batch * tmp_channel, -1)
-        labels_local_x_select = torch.gather(labels_local_x, 1, labels_max_ids)
-        labels_local_y = labels_y.view(tmp_batch * tmp_channel, -1)
-        labels_local_y_select = torch.gather(labels_local_y, 1, labels_max_ids)
-        labels_nb_x = labels_nb_x.view(tmp_batch * self.num_nb * tmp_channel, -1)
-        labels_nb_x_select = torch.gather(labels_nb_x, 1, labels_max_ids_nb)
-        labels_nb_y = labels_nb_y.view(tmp_batch * self.num_nb * tmp_channel, -1)
-        labels_nb_y_select = torch.gather(labels_nb_y, 1, labels_max_ids_nb)
-
-        labels_map = labels_map.view(tmp_batch, tmp_channel, tmp_height, tmp_width)
-        loss_map = self.criterion_cls(outputs_map, labels_map)
-        loss_x = self.criterion_reg(outputs_local_x_select, labels_local_x_select)
-        loss_y = self.criterion_reg(outputs_local_y_select, labels_local_y_select)
-        loss_nb_x = self.criterion_reg(outputs_nb_x_select, labels_nb_x_select)
-        loss_nb_y = self.criterion_reg(outputs_nb_y_select, labels_nb_y_select)
-        cls_loss = self.cls_weight * loss_map
-        reg_loss = self.reg_weight * (loss_x + loss_y + loss_nb_x + loss_nb_y)
-        return cls_loss + reg_loss
-
-
-def get_meanface(meanface_file, num_nb):
-    with open(meanface_file) as f:
-        meanface = f.readlines()[0]
-
-    meanface = meanface.strip().split()
-    meanface = [float(x) for x in meanface]
-    meanface = np.array(meanface).reshape(-1, 2)
-    # each landmark predicts num_nb neighbors
-    meanface_indices = []
-    for i in range(meanface.shape[0]):
-        pt = meanface[i, :]
-        dists = np.sum(np.power(pt - meanface, 2), axis=1)
-        indices = np.argsort(dists)
-        meanface_indices.append(indices[1:1 + num_nb])
-
-    # each landmark predicted by X neighbors, X varies
-    meanface_indices_reversed = {}
-    for i in range(meanface.shape[0]):
-        meanface_indices_reversed[i] = [[], []]
-    for i in range(meanface.shape[0]):
-        for j in range(num_nb):
-            meanface_indices_reversed[meanface_indices[i][j]][0].append(i)
-            meanface_indices_reversed[meanface_indices[i][j]][1].append(j)
-
-    max_len = 0
-    for i in range(meanface.shape[0]):
-        tmp_len = len(meanface_indices_reversed[i][0])
-        if tmp_len > max_len:
-            max_len = tmp_len
-
-    # tricks, make them have equal length for efficient computation
-    for i in range(meanface.shape[0]):
-        tmp_len = len(meanface_indices_reversed[i][0])
-        meanface_indices_reversed[i][0] += meanface_indices_reversed[i][0] * 10
-        meanface_indices_reversed[i][1] += meanface_indices_reversed[i][1] * 10
-        meanface_indices_reversed[i][0] = meanface_indices_reversed[i][0][:max_len]
-        meanface_indices_reversed[i][1] = meanface_indices_reversed[i][1][:max_len]
-
-    # make the indices 1-dim
-    reverse_index1 = []
-    reverse_index2 = []
-    for i in range(meanface.shape[0]):
-        reverse_index1 += meanface_indices_reversed[i][0]
-        reverse_index2 += meanface_indices_reversed[i][1]
-    return meanface_indices, reverse_index1, reverse_index2, max_len
-
-
-def forward_pip(params, model, inputs, input_size, reverse_index1, reverse_index2, max_len):
-    model.eval()
-    with torch.no_grad():
-        outputs = model(inputs)
-        output_keys = ['cls_layer', 'x_layer', 'y_layer', 'nb_x_layer', 'nb_y_layer']
-        outputs_cls, outputs_x, outputs_y, outputs_nb_x, outputs_nb_y = (outputs[key] for key in output_keys)
-        tmp_batch, tmp_channel, tmp_height, tmp_width = outputs_cls.size()
-
-        assert tmp_batch == 1
-
-        outputs_cls = outputs_cls.view(tmp_batch * tmp_channel, -1)
-        max_ids = torch.argmax(outputs_cls, 1)
-        max_cls = torch.max(outputs_cls, 1)[0]
-        max_ids = max_ids.view(-1, 1)
-        max_ids_nb = max_ids.repeat(1, params['num_nb']).view(-1, 1)
-
-        outputs_x = outputs_x.view(tmp_batch * tmp_channel, -1)
-        outputs_x_select = torch.gather(outputs_x, 1, max_ids)
-        outputs_x_select = outputs_x_select.squeeze(1)
-        outputs_y = outputs_y.view(tmp_batch * tmp_channel, -1)
-        outputs_y_select = torch.gather(outputs_y, 1, max_ids)
-        outputs_y_select = outputs_y_select.squeeze(1)
-
-        outputs_nb_x = outputs_nb_x.view(tmp_batch * params['num_nb'] * tmp_channel, -1)
-        outputs_nb_x_select = torch.gather(outputs_nb_x, 1, max_ids_nb)
-        outputs_nb_x_select = outputs_nb_x_select.squeeze(1).view(-1, params['num_nb'])
-        outputs_nb_y = outputs_nb_y.view(tmp_batch * params['num_nb'] * tmp_channel, -1)
-        outputs_nb_y_select = torch.gather(outputs_nb_y, 1, max_ids_nb)
-        outputs_nb_y_select = outputs_nb_y_select.squeeze(1).view(-1, params['num_nb'])
-
-        lms_x = (max_ids % tmp_width).view(-1, 1).float() + outputs_x_select.view(-1, 1)
-        lms_y = (max_ids // tmp_width).view(-1, 1).float() + outputs_y_select.view(-1, 1)
-        lms_x /= 1.0 * input_size / params['stride']
-        lms_y /= 1.0 * input_size / params['stride']
-
-        lms_nb_x = (max_ids % tmp_width).view(-1, 1).float() + outputs_nb_x_select
-        lms_nb_y = (max_ids // tmp_width).view(-1, 1).float() + outputs_nb_y_select
-        lms_nb_x = lms_nb_x.view(-1, params['num_nb'])
-        lms_nb_y = lms_nb_y.view(-1, params['num_nb'])
-        lms_nb_x /= 1.0 * input_size / params['stride']
-        lms_nb_y /= 1.0 * input_size / params['stride']
-
-        lms_pred = torch.cat((lms_x, lms_y), dim=1).flatten().cpu().numpy()
-        tmp_nb_x = lms_nb_x[reverse_index1, reverse_index2].view(params['num_lms'], max_len)
-        tmp_nb_y = lms_nb_y[reverse_index1, reverse_index2].view(params['num_lms'], max_len)
-        tmp_x = torch.mean(torch.cat((lms_x, tmp_nb_x), dim=1), dim=1).view(-1, 1)
-        tmp_y = torch.mean(torch.cat((lms_y, tmp_nb_y), dim=1), dim=1).view(-1, 1)
-        lms_pred_merge = torch.cat((tmp_x, tmp_y), dim=1).flatten().cpu().numpy()
-
-    return lms_pred_merge
-
-
 def compute_nme(lms_pred, lms_gt, norm):
     lms_pred = lms_pred.reshape((-1, 2))
     lms_gt = lms_gt.reshape((-1, 2))
@@ -168,123 +59,384 @@ def compute_nme(lms_pred, lms_gt, norm):
     return nme
 
 
-def compute_fr_and_auc(nmes, thres=0.1, step=0.0001):
-    num_data = len(nmes)
-    xs = np.arange(0, thres + step, step)
-    ys = np.array([np.count_nonzero(nmes <= x) for x in xs]) / float(num_data)
+def compute_fr_and_auc(nme, thresh=0.1, step=0.0001):
+    num_data = len(nme)
+    xs = np.arange(0, thresh + step, step)
+    ys = np.array([np.count_nonzero(nme <= x) for x in xs]) / float(num_data)
     fr = 1.0 - ys[-1]
-    auc = simps(ys, x=xs) / thres
+    auc = simps(ys, x=xs) / thresh
     return fr, auc
 
 
-def process(root_folder, folder_name, image_name, label_name, target_size):
-    image_path = os.path.join(root_folder, folder_name, image_name)
-    label_path = os.path.join(root_folder, folder_name, label_name)
+def compute_indices(indices_file, num_nb):
+    with open(indices_file) as f:
+        indices = f.readlines()[0]
 
-    with open(label_path, 'r') as ff:
-        anno = ff.readlines()
-        anno = [x.strip().split() for x in anno]
-        anno = [[int(float(x[0])), int(float(x[1]))] for x in anno]
-        image = cv2.imread(image_path)
-        image_height, image_width, _ = image.shape
-        anno_x = [x[0] for x in anno]
-        anno_y = [x[1] for x in anno]
-        bbox_xmin = min(anno_x)
-        bbox_ymin = min(anno_y)
-        bbox_xmax = max(anno_x)
-        bbox_ymax = max(anno_y)
-        bbox_width = bbox_xmax - bbox_xmin
-        bbox_height = bbox_ymax - bbox_ymin
-        scale = 1.1
-        bbox_xmin -= int((scale - 1) / 2 * bbox_width)
-        bbox_ymin -= int((scale - 1) / 2 * bbox_height)
-        bbox_width *= scale
-        bbox_height *= scale
-        bbox_width = int(bbox_width)
-        bbox_height = int(bbox_height)
-        bbox_xmin = max(bbox_xmin, 0)
-        bbox_ymin = max(bbox_ymin, 0)
-        bbox_width = min(bbox_width, image_width - bbox_xmin - 1)
-        bbox_height = min(bbox_height, image_height - bbox_ymin - 1)
-        anno = [[(x - bbox_xmin) / bbox_width, (y - bbox_ymin) / bbox_height] for x, y in anno]
+    indices = indices.strip().split()
+    indices = [float(x) for x in indices]
+    indices = np.array(indices).reshape(-1, 2)
+    mean_indices = []
+    for i in range(indices.shape[0]):
+        pt = indices[i, :]
+        dists = np.sum(np.power(pt - indices, 2), axis=1)
+        indices_sort = np.argsort(dists)
+        mean_indices.append(indices_sort[1:1 + num_nb])
 
-        bbox_xmax = bbox_xmin + bbox_width
-        bbox_ymax = bbox_ymin + bbox_height
-        image_crop = image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax, :]
-        image_crop = cv2.resize(image_crop, (target_size, target_size))
-        return image_crop, anno
+    # each landmark predicted by X neighbors, X varies
+    mean_indices_reversed = {}
+    for i in range(indices.shape[0]):
+        mean_indices_reversed[i] = [[], []]
+    for i in range(indices.shape[0]):
+        for j in range(num_nb):
+            mean_indices_reversed[mean_indices[i][j]][0].append(i)
+            mean_indices_reversed[mean_indices[i][j]][1].append(j)
+
+    max_len = 0
+    for i in range(indices.shape[0]):
+        tmp_len = len(mean_indices_reversed[i][0])
+        if tmp_len > max_len:
+            max_len = tmp_len
+
+    # tricks, make them have equal length for efficient computation
+    for i in range(indices.shape[0]):
+        tmp_len = len(mean_indices_reversed[i][0])
+        mean_indices_reversed[i][0] += mean_indices_reversed[i][0] * 10
+        mean_indices_reversed[i][1] += mean_indices_reversed[i][1] * 10
+        mean_indices_reversed[i][0] = mean_indices_reversed[i][0][:max_len]
+        mean_indices_reversed[i][1] = mean_indices_reversed[i][1][:max_len]
+
+    # make the indices 1-dim
+    reverse_index1 = []
+    reverse_index2 = []
+    for i in range(indices.shape[0]):
+        reverse_index1 += mean_indices_reversed[i][0]
+        reverse_index2 += mean_indices_reversed[i][1]
+    return mean_indices, reverse_index1, reverse_index2, max_len
 
 
-def convert(root_folder, target_size):
-    if not os.path.exists(os.path.join(root_folder, 'images', 'train')):
-        os.makedirs(os.path.join(root_folder, 'images', 'train'))
-    if not os.path.exists(os.path.join(root_folder, 'images', 'test')):
-        os.makedirs(os.path.join(root_folder, 'images', 'test'))
+class EMA:
+    """
+    Updated Exponential Moving Average (EMA) from https://github.com/rwightman/pytorch-image-models
+    Keeps a moving average of everything in the model state_dict (parameters and buffers)
+    For EMA details see https://www.tensorflow.org/api_docs/python/tf/train/ExponentialMovingAverage
+    """
 
-    folder_names = ['aihub', 'data_voucher', 'dibox', 'nir_face', 'zerone']
-    folders_train = [name + '/train' for name in folder_names]
-    annos_train = {}
-    for folder_train in folders_train:
-        all_files = sorted(os.listdir(os.path.join(root_folder, folder_train)))
-        image_files = [x for x in all_files if '.pts' not in x]
-        label_files = [x for x in all_files if '.pts' in x]
-        assert len(image_files) == len(label_files)
-        for image_name, label_name in zip(image_files, label_files):
-            print(image_name)
-            image_crop, anno = process(os.path.join(root_folder), folder_train, image_name,
-                                       label_name, target_size)
-            image_crop_name = folder_train.replace('/', '_') + '_' + image_name
-            cv2.imwrite(os.path.join(root_folder, 'images/train', image_crop_name), image_crop)
-            annos_train[image_crop_name] = anno
-    with open(os.path.join(root_folder, 'train.txt'), 'w') as f:
-        for image_crop_name, anno in annos_train.items():
-            f.write(image_crop_name + ' ')
-            for x, y in anno:
-                f.write(str(x) + ' ' + str(y) + ' ')
-            f.write('\n')
+    def __init__(self, model, decay=0.9999, tau=2000, updates=0):
+        # Create EMA
+        self.ema = copy.deepcopy(model).eval()  # FP32 EMA
+        self.updates = updates  # number of EMA updates
+        # decay exponential ramp (to help early epochs)
+        self.decay = lambda x: decay * (1 - math.exp(-x / tau))
+        for p in self.ema.parameters():
+            p.requires_grad_(False)
 
-    folder_names = ['aihub', 'data_voucher', 'dibox', 'nir_face', 'zerone']
-    folders_test = [name + '/test' for name in folder_names]
-    annos_test = {}
-    for folder_test in folders_test:
-        all_files = sorted(os.listdir(os.path.join(root_folder, folder_test)))
-        image_files = [x for x in all_files if '.pts' not in x]
-        label_files = [x for x in all_files if '.pts' in x]
-        assert len(image_files) == len(label_files)
-        for image_name, label_name in zip(image_files, label_files):
-            print(image_name)
-            image_crop, anno = process(os.path.join(root_folder), folder_test, image_name,
-                                       label_name, target_size)
-            image_crop_name = folder_test.replace('/', '_') + '_' + image_name
-            cv2.imwrite(os.path.join(root_folder, 'images/test', image_crop_name), image_crop)
-            annos_test[image_crop_name] = anno
-    with open(os.path.join(root_folder, 'test.txt'), 'w') as f:
-        for image_crop_name, anno in annos_test.items():
-            f.write(image_crop_name + ' ')
-            for x, y in anno:
-                f.write(str(x) + ' ' + str(y) + ' ')
-            f.write('\n')
+    def update(self, model):
+        if hasattr(model, 'module'):
+            model = model.module
+        # Update EMA parameters
+        with torch.no_grad():
+            self.updates += 1
+            d = self.decay(self.updates)
 
-    annos = None
-    with open(os.path.join(root_folder, 'test.txt'), 'r') as f:
-        annos = f.readlines()
-    with open(os.path.join(root_folder, 'test_common.txt'), 'w') as f:
-        for anno in annos:
-            if not 'ibug' in anno:
-                f.write(anno)
-    with open(os.path.join(root_folder, 'test_challenge.txt'), 'w') as f:
-        for anno in annos:
-            if 'ibug' in anno:
-                f.write(anno)
+            msd = model.state_dict()  # model state_dict
+            for k, v in self.ema.state_dict().items():
+                if v.dtype.is_floating_point:
+                    v *= d
+                    v += (1 - d) * msd[k].detach()
 
-    with open(os.path.join(root_folder, 'train.txt'), 'r') as f:
-        annos = f.readlines()
-    annos = [x.strip().split()[1:] for x in annos]
-    annos = [[float(x) for x in anno] for anno in annos]
-    annos = np.array(annos)
-    meanface = np.mean(annos, axis=0)
-    meanface = meanface.tolist()
-    meanface = [str(x) for x in meanface]
 
-    with open(os.path.join(root_folder, 'indices.txt'), 'w') as f:
-        f.write(' '.join(meanface))
+class ComputeLoss:
+    def __init__(self, params):
+        super().__init__()
+        self.cls = params['cls_weight']
+        self.reg = params['reg_weight']
+        self.num_neighbor = params['num_nb']
+        self.criterion_reg = torch.nn.L1Loss()
+        self.criterion_cls = torch.nn.MSELoss()
+
+    def __call__(self, outputs, targets):
+        device = outputs[0].device
+        b, c, h, w = outputs[0].size()
+
+        score = outputs[0]
+        offset_x = outputs[1].view(b * c, -1)
+        offset_y = outputs[2].view(b * c, -1)
+        neighbor_x = outputs[3].view(b * self.num_neighbor * c, -1)
+        neighbor_y = outputs[4].view(b * self.num_neighbor * c, -1)
+
+        target_score = targets[0].to(device).view(b * c, -1)
+        target_offset_x = targets[1].to(device).view(b * c, -1)
+        target_offset_y = targets[2].to(device).view(b * c, -1)
+        target_neighbor_x = targets[3].to(device).view(b * self.num_neighbor * c, -1)
+        target_neighbor_y = targets[4].to(device).view(b * self.num_neighbor * c, -1)
+
+        target_max_index = torch.argmax(target_score, 1).view(-1, 1)
+        target_max_index_neighbor = target_max_index.repeat(1, self.num_neighbor).view(-1, 1)
+
+        offset_x_select = torch.gather(offset_x, 1, target_max_index)
+        offset_y_select = torch.gather(offset_y, 1, target_max_index)
+        neighbor_x_select = torch.gather(neighbor_x, 1, target_max_index_neighbor)
+        neighbor_y_select = torch.gather(neighbor_y, 1, target_max_index_neighbor)
+
+        target_offset_x_select = torch.gather(target_offset_x, 1, target_max_index)
+        target_offset_y_select = torch.gather(target_offset_y, 1, target_max_index)
+        target_neighbor_x_select = torch.gather(target_neighbor_x, 1, target_max_index_neighbor)
+        target_neighbor_y_select = torch.gather(target_neighbor_y, 1, target_max_index_neighbor)
+
+        loss_cls = self.criterion_cls(score, target_score.view(b, c, h, w))
+        loss_offset_x = self.criterion_reg(offset_x_select, target_offset_x_select)
+        loss_offset_y = self.criterion_reg(offset_y_select, target_offset_y_select)
+        loss_neighbor_x = self.criterion_reg(neighbor_x_select, target_neighbor_x_select)
+        loss_neighbor_y = self.criterion_reg(neighbor_y_select, target_neighbor_y_select)
+
+        loss_cls = self.cls * loss_cls
+        loss_reg = self.reg * (loss_offset_x + loss_offset_y + loss_neighbor_x + loss_neighbor_y)
+        return loss_cls + loss_reg
+
+
+class AverageMeter:
+    def __init__(self):
+        self.num = 0
+        self.sum = 0
+        self.avg = 0
+
+    def update(self, v, n):
+        if not math.isnan(float(v)):
+            self.num = self.num + n
+            self.sum = self.sum + v * n
+            self.avg = self.sum / self.num
+
+
+class FaceDetector:
+    def __init__(self, onnx_path=None, session=None):
+        from onnxruntime import InferenceSession
+        self.session = session
+
+        self.batched = False
+        if self.session is None:
+            assert onnx_path is not None
+            assert os.path.exists(onnx_path)
+            self.session = InferenceSession(onnx_path,
+                                            providers=['CUDAExecutionProvider'])
+        self.nms_thresh = 0.4
+        self.center_cache = {}
+        input_cfg = self.session.get_inputs()[0]
+        input_shape = input_cfg.shape
+        if isinstance(input_shape[2], str):
+            self.input_size = None
+        else:
+            self.input_size = tuple(input_shape[2:4][::-1])
+        input_name = input_cfg.name
+        outputs = self.session.get_outputs()
+        if len(outputs[0].shape) == 3:
+            self.batched = True
+        output_names = []
+        for output in outputs:
+            output_names.append(output.name)
+        self.input_name = input_name
+        self.output_names = output_names
+        self.use_kps = False
+        self._num_anchors = 1
+        if len(outputs) == 6:
+            self.fmc = 3
+            self._feat_stride_fpn = [8, 16, 32]
+            self._num_anchors = 2
+        elif len(outputs) == 9:
+            self.fmc = 3
+            self._feat_stride_fpn = [8, 16, 32]
+            self._num_anchors = 2
+            self.use_kps = True
+        elif len(outputs) == 10:
+            self.fmc = 5
+            self._feat_stride_fpn = [8, 16, 32, 64, 128]
+            self._num_anchors = 1
+        elif len(outputs) == 15:
+            self.fmc = 5
+            self._feat_stride_fpn = [8, 16, 32, 64, 128]
+            self._num_anchors = 1
+            self.use_kps = True
+
+    def forward(self, x, score_thresh):
+        scores_list = []
+        bboxes_list = []
+        points_list = []
+        input_size = tuple(x.shape[0:2][::-1])
+        blob = cv2.dnn.blobFromImage(x,
+                                     1.0 / 128,
+                                     input_size,
+                                     (127.5, 127.5, 127.5), swapRB=True)
+        outputs = self.session.run(self.output_names, {self.input_name: blob})
+        input_height = blob.shape[2]
+        input_width = blob.shape[3]
+        fmc = self.fmc
+        for idx, stride in enumerate(self._feat_stride_fpn):
+            if self.batched:
+                scores = outputs[idx][0]
+                boxes = outputs[idx + fmc][0]
+                boxes = boxes * stride
+            else:
+                scores = outputs[idx]
+                boxes = outputs[idx + fmc]
+                boxes = boxes * stride
+
+            height = input_height // stride
+            width = input_width // stride
+            key = (height, width, stride)
+            if key in self.center_cache:
+                anchor_centers = self.center_cache[key]
+            else:
+                anchor_centers = np.stack(np.mgrid[:height, :width][::-1], axis=-1)
+                anchor_centers = anchor_centers.astype(np.float32)
+
+                anchor_centers = (anchor_centers * stride).reshape((-1, 2))
+                if self._num_anchors > 1:
+                    anchor_centers = np.stack([anchor_centers] * self._num_anchors, axis=1)
+                    anchor_centers = anchor_centers.reshape((-1, 2))
+                if len(self.center_cache) < 100:
+                    self.center_cache[key] = anchor_centers
+
+            pos_indices = np.where(scores >= score_thresh)[0]
+            bboxes = self.distance2box(anchor_centers, boxes)
+            pos_scores = scores[pos_indices]
+            pos_bboxes = bboxes[pos_indices]
+            scores_list.append(pos_scores)
+            bboxes_list.append(pos_bboxes)
+        return scores_list, bboxes_list
+
+    def detect(self, image, input_size=None, score_threshold=0.5, max_num=0, metric='default'):
+        assert input_size is not None or self.input_size is not None
+        input_size = self.input_size if input_size is None else input_size
+        image_ratio = float(image.shape[0]) / image.shape[1]
+        model_ratio = float(input_size[1]) / input_size[0]
+        if image_ratio > model_ratio:
+            new_height = input_size[1]
+            new_width = int(new_height / image_ratio)
+        else:
+            new_width = input_size[0]
+            new_height = int(new_width * image_ratio)
+        det_scale = float(new_height) / image.shape[0]
+        resized_img = cv2.resize(image, (new_width, new_height))
+        det_img = np.zeros((input_size[1], input_size[0], 3), dtype=np.uint8)
+        det_img[:new_height, :new_width, :] = resized_img
+
+        scores_list, bboxes_list = self.forward(det_img, score_threshold)
+
+        scores = np.vstack(scores_list)
+        scores_ravel = scores.ravel()
+        order = scores_ravel.argsort()[::-1]
+        bboxes = np.vstack(bboxes_list) / det_scale
+        pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+        pre_det = pre_det[order, :]
+        keep = self.nms(pre_det)
+        det = pre_det[keep, :]
+        if 0 < max_num < det.shape[0]:
+            area = (det[:, 2] - det[:, 0]) * (det[:, 3] - det[:, 1])
+            img_center = image.shape[0] // 2, image.shape[1] // 2
+            offsets = np.vstack([(det[:, 0] + det[:, 2]) / 2 - img_center[1],
+                                 (det[:, 1] + det[:, 3]) / 2 - img_center[0]])
+            offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
+            if metric == 'max':
+                values = area
+            else:
+                values = area - offset_dist_squared * 2.0  # some extra weight on the centering
+            index = np.argsort(values)[::-1]  # some extra weight on the centering
+            index = index[0:max_num]
+            det = det[index, :]
+        return det
+
+    def nms(self, outputs):
+        thresh = self.nms_thresh
+        x1 = outputs[:, 0]
+        y1 = outputs[:, 1]
+        x2 = outputs[:, 2]
+        y2 = outputs[:, 3]
+        scores = outputs[:, 4]
+
+        order = scores.argsort()[::-1]
+        areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+
+            w = np.maximum(0.0, xx2 - xx1 + 1)
+            h = np.maximum(0.0, yy2 - yy1 + 1)
+            inter = w * h
+            ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+            indices = np.where(ovr <= thresh)[0]
+            order = order[indices + 1]
+
+        return keep
+
+    @staticmethod
+    def distance2box(points, distance, max_shape=None):
+        x1 = points[:, 0] - distance[:, 0]
+        y1 = points[:, 1] - distance[:, 1]
+        x2 = points[:, 0] + distance[:, 2]
+        y2 = points[:, 1] + distance[:, 3]
+        if max_shape is not None:
+            x1 = x1.clamp(min=0, max=max_shape[1])
+            y1 = y1.clamp(min=0, max=max_shape[0])
+            x2 = x2.clamp(min=0, max=max_shape[1])
+            y2 = y2.clamp(min=0, max=max_shape[0])
+        return np.stack([x1, y1, x2, y2], axis=-1)
+
+
+def export(args, weight_path):
+    import onnx  # noqa
+    import torch  # noqa
+    import onnxsim  # noqa
+
+    model = torch.load(weight_path)['model'].float().cpu()
+    model.eval()
+    image = torch.zeros((1, 3, args.input_size, args.input_size))
+
+    torch.onnx.export(model,
+                      image,
+                      weight_path.replace('pt', 'onnx'),
+                      verbose=False,
+                      opset_version=12,
+                      do_constant_folding=True,
+                      input_names=['inputs'],
+                      output_names=['outputs', 'score'],
+                      dynamic_axes=None)
+
+    # Checks
+    model_onnx = onnx.load(weight_path.replace('pt', 'onnx'))  # load onnx model
+
+    # Simplify
+    try:
+        model_onnx, check = onnxsim.simplify(model_onnx)
+        assert check, 'Simplified ONNX model could not be validated'
+    except Exception as e:
+        print(e)
+
+    onnx.save(model_onnx, weight_path.replace('pt', 'onnx'))
+
+
+class LandmarkDetector:
+    def __init__(self, onnx_path=None, session=None):
+        self.session = session
+        from onnxruntime import InferenceSession
+
+        if self.session is None:
+            assert onnx_path is not None
+            assert os.path.exists(onnx_path)
+            self.session = InferenceSession(onnx_path,
+                                            providers=['CPUExecutionProvider'])
+        self.output_names = []
+        for output in self.session.get_outputs():
+            self.output_names.append(output.name)
+        self.input_name = self.session.get_inputs()[0].name
+
+    def __call__(self, x):
+        outputs = self.session.run(self.output_names, {self.input_name: x})
+        # output = outputs[0]
+        # score = outputs[1]
+        return outputs

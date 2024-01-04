@@ -1,0 +1,21 @@
+data_dir: './Dataset/'                         # Dataset path
+output_dir: 'outputs/'                         # output path to save weights/results/inference results
+num_nb: 10                                     # num of neighbors
+stride: 32                                     # stride
+num_lms: 68                                    # num of landmarks
+init_lr: 0.0001                                # initial learning rate
+index: [36, 45]                                # norm index for landmark points => corners of the eyes
+decay_steps: [30, 50]                          # decay steps
+cls_weight: 12                                 # classification weight
+reg_weight: 1                                  # regression weight
+loss_cls: 'l2'                                 # classification loss    'l2': torch.nn.MSELoss()
+reg_cls: 'l1'                                  # regression loss        'l1': torch.nn.L1Loss(),
+criterion_cls: 'l2'
+criterion_reg: 'l1'
+
+
+points_id: [17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1,                              # jaw
+            27, 26, 25, 24, 23, 22, 21, 20, 19, 18,                                                 # eyebrows
+            28, 29, 30, 31, 36, 35, 34, 33, 32,                                                     # nose
+            46, 45, 44, 43, 48, 47, 40, 39, 38, 37, 42, 41,                                         # eyes
+            55, 54, 53, 52, 51, 50, 49, 60, 59, 58, 57, 56, 65, 64, 63, 62, 61, 68, 67, 66]         # lip
