@@ -113,13 +113,91 @@ def test(args, params, model=None):
 
 
 @torch.no_grad()
-def demo_onnx(args, params):
+def demo(args, params):
+    std = np.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
+    mean = np.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
+    weight_dir = os.path.join(params['output_dir'], 'weights')
+    model = torch.load(f'{weight_dir}/last.pt', 'cuda')
+    model = model['model'].float()
+    detector = util.FaceDetector(f'{weight_dir}/detection.onnx')
+
+    model.half()
+    model.eval()
+
+    scale = 1.2
+    stream = cv2.VideoCapture(-1)
+
+    # Check if camera opened successfully
+    if not stream.isOpened():
+        print("Error opening video stream or file")
+
+    w = int(stream.get(3))
+    h = int(stream.get(4))
+
+    # Read until video is completed
+    while stream.isOpened():
+        # Capture frame-by-frame
+        success, frame = stream.read()
+        if success:
+            boxes = detector.detect(frame, (640, 640))
+            boxes = boxes.astype('int32')
+            for box in boxes:
+                x_min = box[0]
+                y_min = box[1]
+                x_max = box[2]
+                y_max = box[3]
+                box_w = x_max - x_min
+                box_h = y_max - y_min
+
+                # remove a part of top area for alignment, see paper for details
+                x_min -= int(box_w * (scale - 1) / 2)
+                y_min += int(box_h * (scale - 1) / 2)
+                x_max += int(box_w * (scale - 1) / 2)
+                y_max += int(box_h * (scale - 1) / 2)
+                x_min = max(x_min, 0)
+                y_min = max(y_min, 0)
+                x_max = min(x_max, w - 1)
+                y_max = min(y_max, h - 1)
+                box_w = x_max - x_min + 1
+                box_h = y_max - y_min + 1
+                image = frame[y_min:y_max, x_min:x_max, :]
+                image = cv2.resize(image, (args.input_size, args.input_size))
+                image = image.astype('float32')
+                cv2.cvtColor(image, cv2.COLOR_BGR2RGB, image)  # inplace
+                cv2.subtract(image, mean, image)  # inplace
+                cv2.multiply(image, 1 / std, image)  # inplace
+                image = image.transpose((2, 0, 1))
+                image = np.ascontiguousarray(image)
+                image = torch.from_numpy(image).unsqueeze(0)
+
+                image = image.cuda()
+                image = image.half()
+
+                output = model(image)[0].cpu().numpy()
+
+                for i in range(params['num_lms']):
+                    x = int(output[i * 2] * box_w)
+                    y = int(output[i * 2 + 1] * box_h)
+                    cv2.circle(frame, (x + x_min, y + y_min), 1, (0, 255, 0), 1)
+
+            cv2.imshow('IMAGE', frame)
+
+            # Press Q on keyboard to  exit
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+        # Break the loop
+        else:
+            break
+    # When everything done, release the video capture object
+    stream.release()
+    # Closes all the frames
+    cv2.destroyAllWindows()
     std = np.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
     mean = np.array([58.395, 57.12, 57.375], 'float64').reshape(1, -1)
 
     detector = util.FaceDetector('./outputs/weights/detection.onnx')
 
-    landmark = util.LandmarkDetector('./outputs/weights/last.onnx')
+    landmark = util.LandmarkDetector('./outputs/weights/last.pt')
 
     scale = 1.2
     stream = cv2.VideoCapture(-1)
@@ -202,7 +280,7 @@ def main():
     parser.add_argument('--epochs', default=120, type=int)
     parser.add_argument('--train', action='store_true')
     parser.add_argument('--test', action='store_true')
-    parser.add_argument('--demo_onnx', default=True, action='store_true')
+    parser.add_argument('--demo', default=True, action='store_true')
     parser.add_argument('--export_onnx', action='store_true')
 
     args = parser.parse_args()
@@ -217,8 +295,8 @@ def main():
         train(args, params)
     if args.test:
         test(args, params)
-    if args.demo_onnx:
-        demo_onnx(args, params)
+    if args.demo:
+        demo(args, params)
     if args.export_onnx:
         util.export(args, 'outputs/weights/last.pt')
 
