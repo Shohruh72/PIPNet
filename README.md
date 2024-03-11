@@ -38,7 +38,7 @@ _**To train the model, run:**_
 * Configure your dataset path in main.py for training
 
 ```bash
-$ python main.py --train --input-size 256 --batch-size 16 --epochs 60
+$ python main.py --train
 ```
 ### Testing
 _**For testing the model, use:**_
@@ -57,6 +57,7 @@ $ python main.py --demo
 | Backbone  | Epochs | Test NME |                                                                 Pretrained weights |
 |:---------:|:------:|---------:|-----------------------------------------------------------------------------------:|
 | ResNet18  |   120  |     3.37 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best.pt) |
+| ResNet50  |   120  |     3.23 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best_50.pt) |
  
 
 ##### Reference
