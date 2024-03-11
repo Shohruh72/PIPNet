@@ -8,7 +8,7 @@ from PIL import Image, ImageFilter
 
 
 class DataGenerator:
-    def __init__(self, data_dir, target_size):
+    def __init__(self, data_dir, target_size=256):
         self.data_dir = data_dir
         self.target_size = target_size
 
