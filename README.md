@@ -7,8 +7,6 @@
 ### Key Achievements
 #### Exceptional Model Performance on the 300W Dataset
 
-> PIPNet model has achieved a significant milestone on the 300W dataset, one of the most challenging benchmarks in facial landmark detection. Successfully attained a minimum Normalized Mean Error (NME) of 2.6%, demonstrating the model's high accuracy and robustness in complex facial recognition tasks.
-
 ## Features
 * #### Utilizes ResNet as the backbone for the PIPNet model.
 * #### Supports training, testing, and real-time demo modes.
@@ -30,7 +28,7 @@ pip install tqdm
 * Download the datasets from official sources.
 * Run below command:
 ```bash
-$ python converter.py --data_dir './Dataset'
+$ python utils/util.py --data_dir './Dataset'
 ```
 
 ### Training
@@ -56,7 +54,7 @@ $ python main.py --demo
 ### Results
 | Backbone  | Epochs | Test NME |                                                                 Pretrained weights |
 |:---------:|:------:|---------:|-----------------------------------------------------------------------------------:|
-| ResNet18  |   60   |     3.39 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-501559a3c4e3225a331b/last.pt) |
+| ResNet18  |   120  |     3.37 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best.pt) |
  
 
 ##### Reference
