@@ -34,7 +34,7 @@ pip install tqdm
  * #### ibug
  * #### lfpw  
 
-* Run the below command for dataset preparation
+ **Run the below command for dataset preparation**
 ```bash
 $ python -c 'from utils.util import DataGenerator; gen = DataGenerator("../Datasets_path/"); gen.run()'
 ```
