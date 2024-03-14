@@ -28,10 +28,15 @@ pip install tqdm
 ## Usage
 **Datasets: [300W](https://ibug.doc.ic.ac.uk/resources/facial-point-annotations/)**
 * Download the datasets from official sources.
-* check the below class for Dataset preparation:
+* Run the below command for dataset preparation
 ```bash
-$ python utils/util.py ==> DataGenerator class
+$ python -c 'from utils.util import DataGenerator; gen = DataGenerator("../Datasets_path/"); gen.run()'
 ```
+ **Dataset path should include:**
+ * #### afw
+ * #### helen
+ * #### ibug
+ * #### lfpw  
 
 ### Training
 _**To train the model, run:**_
