@@ -64,6 +64,7 @@ $ python main.py --demo
 |:---------:|:------:|---------:|-----------------------------------------------------------------------------------:|
 | ResNet18  |   120  |     3.37 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best.pt) |
 | ResNet50  |   120  |     3.23 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best_50.pt) |
+| ResNet101 |   120  |     3.17 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best_101.pt) |
  
 
 ##### Reference
