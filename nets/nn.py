@@ -1,16 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torchvision.models as models
 
 
 class PIPNet(nn.Module):
-    def __init__(self, params, resnet, resnet_type,
-                 mean_indices, reverse_index1, reverse_index2, max_len):
+    def __init__(self, params, resnet_type, mean_indices,
+                 reverse_index1, reverse_index2, max_len):
         super(PIPNet, self).__init__()
-        if resnet_type in ['resnet50', 'resnet101']:
-            feature_size = 2048
-        else:
+
+        resnet = self.get_resnet(resnet_type)
+        if resnet_type == 'resnet18':
             feature_size = 512
+        else:
+            feature_size = 2048
 
         self.conv1 = resnet.conv1
         self.bn1 = resnet.bn1
@@ -107,3 +110,14 @@ class PIPNet(nn.Module):
         tmp_y = torch.mean(torch.cat((tmp_y, tmp_nb_y), dim=1), dim=1).view(-1, 1)
         lms_pred_merge = torch.cat((tmp_x, tmp_y), dim=1)
         return torch.flatten(lms_pred_merge)
+
+    @staticmethod
+    def get_resnet(resnet_type):
+        if resnet_type == 'resnet18':
+            return models.resnet18(pretrained=True)
+        elif resnet_type == 'resnet50':
+            return models.resnet50(pretrained=True)
+        elif resnet_type == 'resnet101':
+            return models.resnet101(pretrained=True)
+        else:
+            raise ValueError("Unsupported ResNet type. Choose from 'resnet18', 'resnet50', 'resnet101'.")
