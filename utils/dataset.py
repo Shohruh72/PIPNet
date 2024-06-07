@@ -1,8 +1,8 @@
 from math import floor
 from os.path import dirname, join
 
-import torchvision.transforms as T
 from torch.utils import data
+import torchvision.transforms as T
 
 from utils.util import *
 
