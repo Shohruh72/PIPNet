@@ -1,10 +1,10 @@
 import os
-import random
-
 import cv2
-import numpy as np
+import math
 import torch
-from PIL import Image, ImageFilter
+import random
+import numpy as np
+from PIL import Image, ImageEnhance, ImageOps, ImageFilter
 
 
 class DataGenerator:
@@ -158,7 +158,7 @@ class ComputeLoss:
         self.cls = params['crit_cls']
         self.reg = params['crit_reg']
         self.num_neighbor = params['num_nb']
-        self.criterion_reg = torch.nn.L1Loss()
+        self.criterion_reg = torch.nn.SmoothL1Loss()
         self.criterion_cls = torch.nn.MSELoss()
 
     def __call__(self, outputs, targets):
@@ -199,6 +199,19 @@ class ComputeLoss:
         loss_cls = self.cls * loss_cls
         loss_reg = self.reg * (loss_offset_x + loss_offset_y + loss_neighbor_x + loss_neighbor_y)
         return loss_cls + loss_reg
+
+
+class AverageMeter:
+    def __init__(self):
+        self.num = 0
+        self.sum = 0
+        self.avg = 0
+
+    def update(self, v, n):
+        if not math.isnan(float(v)):
+            self.num = self.num + n
+            self.sum = self.sum + v * n
+            self.avg = self.sum / self.num
 
 
 def compute_nme(output, target, norm):
@@ -369,6 +382,55 @@ class RandomRGB2IR:
         ir = image[:, :, 2]
         ir = np.clip(ir + delta, 0, 255)
         return Image.fromarray(np.stack((ir, ir, ir), axis=2).astype('uint8')), label
+
+
+class RandomScaling:
+    def __init__(self, scale_factor=0.2, p=0.5):
+        self.scale_factor = scale_factor
+        self.p = p
+
+    def __call__(self, image, label):
+        if random.random() < self.p:
+            width, height = image.size
+            scale = 1 + random.uniform(-self.scale_factor, self.scale_factor)
+            new_width, new_height = int(width * scale), int(height * scale)
+            image = image.resize((new_width, new_height), resample=Image.BILINEAR)
+
+            label = label.reshape(-1, 2)
+            label[:, 0] = np.clip(label[:, 0] * scale, 0, 1)
+            label[:, 1] = np.clip(label[:, 1] * scale, 0, 1)
+            label = label.flatten()
+
+            if scale < 1:  # Pad the image if it was scaled down
+                padding_w = (width - new_width) // 2
+                padding_h = (height - new_height) // 2
+                image = ImageOps.expand(image, (padding_w, padding_h, padding_w, padding_h))
+                image = image.crop((0, 0, width, height))
+                label = label.reshape(-1, 2)
+                label[:, 0] += padding_w / width
+                label[:, 1] += padding_h / height
+                label = label.flatten()
+
+        return image, label
+
+
+def setup_seed():
+    """
+    Setup random seed.
+    """
+    random.seed(0)
+    np.random.seed(0)
+    torch.manual_seed(0)
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+def strip_optimizer(filename):
+    x = torch.load(filename, map_location=torch.device('cpu'))
+    x['model'].half()  # to FP16
+    for p in x['model'].parameters():
+        p.requires_grad = False
+    torch.save(x, filename)
 
 
 def distance2box(points, distance, max_shape=None):
