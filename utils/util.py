@@ -4,107 +4,110 @@ import math
 import torch
 import random
 import numpy as np
-from PIL import Image, ImageEnhance, ImageOps, ImageFilter
+from os.path import join
+from PIL import Image, ImageOps, ImageFilter
 
 
-class DataGenerator:
-    def __init__(self, data_dir, target_size=256):
-        self.data_dir = data_dir
-        self.target_size = target_size
+def process_300w(folder, data_dir, image_name, label_name, target_size):
+    image_path = join(data_dir, folder, image_name)
+    label_path = join(data_dir, folder, label_name)
 
-        os.makedirs(os.path.join(self.data_dir, 'images/train'), exist_ok=True)
-        os.makedirs(os.path.join(self.data_dir, 'images/test'), exist_ok=True)
+    with open(label_path, 'r') as ff:
+        anno = ff.readlines()[3:-1]
+        anno = [x.strip().split() for x in anno]
+        anno = [[int(float(x[0])), int(float(x[1]))] for x in anno]
+        image = cv2.imread(image_path)
+        image_height, image_width, _ = image.shape
+        anno_x = [x[0] for x in anno]
+        anno_y = [x[1] for x in anno]
+        bbox_xmin = min(anno_x)
+        bbox_ymin = min(anno_y)
+        bbox_xmax = max(anno_x)
+        bbox_ymax = max(anno_y)
+        bbox_width = bbox_xmax - bbox_xmin
+        bbox_height = bbox_ymax - bbox_ymin
+        scale = 1.1
+        bbox_xmin -= int((scale - 1) / 2 * bbox_width)
+        bbox_ymin -= int((scale - 1) / 2 * bbox_height)
+        bbox_width *= scale
+        bbox_height *= scale
+        bbox_width = int(bbox_width)
+        bbox_height = int(bbox_height)
+        bbox_xmin = max(bbox_xmin, 0)
+        bbox_ymin = max(bbox_ymin, 0)
+        bbox_width = min(bbox_width, image_width - bbox_xmin - 1)
+        bbox_height = min(bbox_height, image_height - bbox_ymin - 1)
+        anno = [[(x - bbox_xmin) / bbox_width, (y - bbox_ymin) / bbox_height] for x, y in anno]
 
-    def process_300w(self, folder_name, image_name, label_name):
-        image_path = os.path.join(self.data_dir, folder_name, image_name)
-        label_path = os.path.join(self.data_dir, folder_name, label_name)
+        bbox_xmax = bbox_xmin + bbox_width
+        bbox_ymax = bbox_ymin + bbox_height
+        image_crop = image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax, :]
+        image_crop = cv2.resize(image_crop, (target_size, target_size))
+        return image_crop, anno
 
-        with open(label_path, 'r') as ff:
-            anno = ff.readlines()[3:-1]
-            anno = [x.strip().split() for x in anno]
-            anno = [[int(float(x[0])), int(float(x[1]))] for x in anno]
-            image = cv2.imread(image_path)
-            image_height, image_width, _ = image.shape
-            anno_x = [x[0] for x in anno]
-            anno_y = [x[1] for x in anno]
-            bbox_xmin = min(anno_x)
-            bbox_ymin = min(anno_y)
-            bbox_xmax = max(anno_x)
-            bbox_ymax = max(anno_y)
-            bbox_width = bbox_xmax - bbox_xmin
-            bbox_height = bbox_ymax - bbox_ymin
-            scale = 1.1
-            bbox_xmin -= int((scale - 1) / 2 * bbox_width)
-            bbox_ymin -= int((scale - 1) / 2 * bbox_height)
-            bbox_width *= scale
-            bbox_height *= scale
-            bbox_width = int(bbox_width)
-            bbox_height = int(bbox_height)
-            bbox_xmin = max(bbox_xmin, 0)
-            bbox_ymin = max(bbox_ymin, 0)
-            bbox_width = min(bbox_width, image_width - bbox_xmin - 1)
-            bbox_height = min(bbox_height, image_height - bbox_ymin - 1)
-            anno = [[(x - bbox_xmin) / bbox_width, (y - bbox_ymin) / bbox_height] for x, y in anno]
+def process(data_dir, folders, subset, target_size):
+    os.makedirs(join(data_dir, 'images/train'), exist_ok=True)
+    os.makedirs(join(data_dir, 'images/test'), exist_ok=True)
 
-            bbox_xmax = bbox_xmin + bbox_width
-            bbox_ymax = bbox_ymin + bbox_height
-            image_crop = image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax, :]
-            image_crop = cv2.resize(image_crop, (self.target_size, self.target_size))
-            return image_crop, anno
+    annotations = {}
+    for folder in folders:
+        files = sorted(os.listdir(join(data_dir, folder)))
+        images = [x for x in files if '.pts' not in x]
+        labels = [x for x in files if '.pts' in x]
+        assert len(images) == len(labels)
 
-    def process_dataset(self, folders, subset):
-        annotations = {}
-        for folder in folders:
-            img_path = os.path.join(self.data_dir, folder)
-            files = sorted(os.listdir(img_path))
-            images = [x for x in files if '.pts' not in x]
-            labels = [x for x in files if '.pts' in x]
-            assert len(images) == len(labels)
+        for image, label in zip(images, labels):
+            print(f'{image}---{label}')
+            cropped_image, anno = process_300w(folder, data_dir, image, label, target_size)
+            image_crop_name = folder.replace('/', '_') + '_' + image
+            image_crop_name = join(data_dir, 'images', subset, image_crop_name)
+            cv2.imwrite(image_crop_name, cropped_image)
+            annotations[image_crop_name] = anno
 
-            for image, label in zip(images, labels):
-                print(f'{image}---{label}')
-                cropped_image, anno = self.process_300w(folder, image, label)
-                image_crop_name = folder.replace('/', '_') + '_' + image
-                image_crop_name = os.path.join(self.data_dir, 'images', subset, image_crop_name)
-                cv2.imwrite(image_crop_name, cropped_image)
-                annotations[image_crop_name] = anno
+        with open(join(data_dir, f'images/{subset}.txt'), 'w') as f:
+            for image_crop_name, anno in annotations.items():
+                f.write(image_crop_name + ' ')
+                for x, y in anno:
+                    f.write(str(x) + ' ' + str(y) + ' ')
+                f.write('\n')
 
-            with open(os.path.join(self.data_dir, f'images/{subset}.txt'), 'w') as f:
-                for image_crop_name, anno in annotations.items():
-                    f.write(image_crop_name + ' ')
-                    for x, y in anno:
-                        f.write(str(x) + ' ' + str(y) + ' ')
-                    f.write('\n')
+def data_split(data_dir):
+    with open(join(data_dir, 'images/test.txt'), 'r') as f:
+        annos = f.readlines()
+    with open(join(data_dir, 'images/test_common.txt'), 'w') as f:
+        for anno in annos:
+            if not 'ibug' in anno:
+                f.write(anno)
+    with open(join(data_dir, 'images/test_challenge.txt'), 'w') as f:
+        for anno in annos:
+            if 'ibug' in anno:
+                f.write(anno)
 
-    def split_data(self):
-        with open(os.path.join(self.data_dir, 'images/test.txt'), 'r') as f:
-            annos = f.readlines()
-        with open(os.path.join(self.data_dir, 'images/test_common.txt'), 'w') as f:
-            for anno in annos:
-                if not 'ibug' in anno:
-                    f.write(anno)
-        with open(os.path.join(self.data_dir, 'images/test_challenge.txt'), 'w') as f:
-            for anno in annos:
-                if 'ibug' in anno:
-                    f.write(anno)
+def get_indices(data_dir, file):
+    with open(file, 'r') as f:
+        annotations = f.readlines()
+    annotations = [x.strip().split()[1:] for x in annotations]
+    annotations = np.array([[float(x) for x in anno] for anno in annotations])
+    indices = np.mean(annotations, axis=0)
+    indices = indices.tolist()
+    indices = [str(x) for x in indices]
 
-    def get_indices(self, file):
-        with open(file, 'r') as f:
-            annotations = f.readlines()
-        annotations = [x.strip().split()[1:] for x in annotations]
-        annotations = np.array([[float(x) for x in anno] for anno in annotations])
-        indices = np.mean(annotations, axis=0)
-        indices = indices.tolist()
-        indices = [str(x) for x in indices]
+    with open(join(data_dir, 'images/indices.txt'), 'w') as f:
+        f.write(' '.join(indices))
 
-        with open(os.path.join(self.data_dir, 'images/indices.txt'), 'w') as f:
-            f.write(' '.join(indices))
+def convert(data_dir, target_size=256):
+    process(data_dir,
+            folders=["afw", "helen/trainset", "lfpw/trainset"],
+            subset="train",
+            target_size=target_size)
 
-    def run(self):
-        self.process_dataset(['afw', 'helen/trainset', 'lfpw/trainset'], 'train')
-        self.process_dataset(['helen/testset', 'lfpw/testset', 'ibug'], 'test')
-        self.split_data()
-        self.get_indices(os.path.join(self.data_dir, 'images/train.txt'))
+    process(data_dir,
+            folders=["helen/testset", "lfpw/testset", "ibug"],
+            subset="test",
+            target_size=target_size)
+
+    data_split(data_dir)
+    get_indices(data_dir, join(data_dir, 'images/train.txt'))
 
 
 def compute_indices(mean_face_file, params):
@@ -235,7 +238,7 @@ def resample():
 
 
 class RandomTranslate:
-    def __init__(self, p=0.5):
+    def __init__(self, p=0.4):
         super().__init__()
         self.p = p
 
@@ -262,7 +265,7 @@ class RandomTranslate:
 
 
 class RandomRotate:
-    def __init__(self, angle=45, p=0.5):
+    def __init__(self, angle=45, p=0.4):
         self.angle = angle
         self.p = p
 
@@ -289,7 +292,7 @@ class RandomRotate:
 
 
 class RandomFlip:
-    def __init__(self, params, p=0.5):
+    def __init__(self, params, p=0.4):
         self.points_flip = (np.array(params['points_flip']) - 1).tolist()
         self.p = p
 
@@ -306,7 +309,7 @@ class RandomFlip:
 
 
 class RandomCutOut:
-    def __init__(self, p=0.5):
+    def __init__(self, p=0.3):
         self.p = p
 
     def __call__(self, image, label):
@@ -328,7 +331,7 @@ class RandomCutOut:
 
 
 class RandomGaussianBlur:
-    def __init__(self, p=0.75):
+    def __init__(self, p=0.4):
         self.p = p
 
     def __call__(self, image, label):
@@ -340,7 +343,7 @@ class RandomGaussianBlur:
 
 
 class RandomHSV:
-    def __init__(self, h=0.015, s=0.700, v=0.400, p=0.500):
+    def __init__(self, h=0.015, s=0.700, v=0.400, p=0.400):
         self.h = h
         self.s = s
         self.v = v
@@ -369,7 +372,7 @@ class RandomRGB2IR:
     RGB to IR conversion
     """
 
-    def __init__(self, p=0.5):
+    def __init__(self, p=0.4):
         self.p = p
 
     def __call__(self, image, label):
@@ -385,7 +388,7 @@ class RandomRGB2IR:
 
 
 class RandomScaling:
-    def __init__(self, scale_factor=0.2, p=0.5):
+    def __init__(self, scale_factor=0.2, p=0.4):
         self.scale_factor = scale_factor
         self.p = p
 
@@ -426,7 +429,7 @@ def setup_seed():
 
 
 def strip_optimizer(filename):
-    x = torch.load(filename, map_location=torch.device('cpu'))
+    x = torch.load(filename, map_location=torch.device('cuda'), weights_only=False)
     x['model'].half()  # to FP16
     for p in x['model'].parameters():
         p.requires_grad = False
