@@ -30,9 +30,9 @@ pip install tqdm
 ## Usage
 **Datasets: [300W](https://ibug.doc.ic.ac.uk/resources/facial-point-annotations/)**
 * Download the datasets from official sources.
-* Run below command:
+* Use the **convert()** function to preprocess the 300W dataset::
 ```bash
-$ python converter.py --data_dir './Dataset'
+$ convert(data_dir="/path/to/300W_dataset", target_size=256)
 ```
 
 ### Training
@@ -58,7 +58,7 @@ $ python main.py --demo
 ### Results
 | Backbone  | Epochs | Test NME |                                                                 Pretrained weights |
 |:---------:|:------:|---------:|-----------------------------------------------------------------------------------:|
-| ResNet18  |   60   |     3.39 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/untagged-501559a3c4e3225a331b/last.pt) |
+| ResNet18  |   120  |     3.29 |  [model](https://github.com/Shohruh72/PIPNet/releases/download/v1.0.0/best_18.pt) |
  
 
 ##### Reference
